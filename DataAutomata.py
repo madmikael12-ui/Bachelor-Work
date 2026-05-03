@@ -2,7 +2,7 @@ import random
 from aalpy.utils import generate_random_dfa, generate_random_ONFSM
 
 Alphabet_size = 2
-Max_states = 100
+Max_states = 40
 
 State_tokens = []
 Alphabet = []
