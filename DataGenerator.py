@@ -6,7 +6,7 @@ from sklearn.preprocessing import LabelEncoder
 le = LabelEncoder()
 
 X, y = [], []
-for _ in range(100000):
+for _ in range(40000):
     seq, label = sample()
     X.append(seq)
     y.append(label)

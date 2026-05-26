@@ -1,0 +1,26 @@
+lr = 5e-5
+BATCH_SIZE = 64
+d_model = 256
+nhead = 4
+num_layers = 4
+dropout = 0.1
+weighted: weight_decay = 0.1
+label_smoothing = 0.1
+epochs  = 100
+num_workers = 4
+num_states = 50
+alphabet = 4
+sample = 20 000
+max_len = 1024
+acc_step = 4
+scheduler: CosineAnnealingLR
+
+              precision    recall  f1-score   support
+
+         DFA       0.95      1.00      0.98      1011
+     EPS_NFA       1.00      1.00      1.00       997
+         NFA       1.00      0.95      0.97       992
+
+    accuracy                           0.98      3000
+   macro avg       0.98      0.98      0.98      3000
+weighted avg       0.98      0.98      0.98      3000
