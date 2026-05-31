@@ -3,6 +3,11 @@ from sklearn.model_selection import train_test_split
 from DataAutomata import sample
 from sklearn.preprocessing import LabelEncoder
 
+"""
+This is where we generate the Automata dataset and create the splits for the training
+"""
+
+
 le = LabelEncoder()
 
 X, y = [], []
@@ -12,7 +17,7 @@ for _ in range(40000):
     y.append(label)
 
 y = le.fit_transform(y)
-
+# It is a train-test-val split with 85% train/val and 15% test
 X_temp, X_test, y_temp, y_test = train_test_split(
     X, y, test_size=0.15, stratify=y, random_state=42
 )
@@ -27,11 +32,13 @@ datasets = {
     'test': (X_test, y_test)
 }
 
+# Saving each split in a separate files by using pickle
 for name, data in datasets.items():
     with open(f'{name}_data.pkl', 'wb') as f:
         pickle.dump(data, f)
     print(f"Saved {name} set with {len(data[0])} samples.")
 
+# Saving the label encoder to use it in the dataset loader
 with open("label_encoder.pkl", 'wb') as f:
     pickle.dump(le, f)
     print("Label encoder saved!")

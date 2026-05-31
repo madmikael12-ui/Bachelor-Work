@@ -11,11 +11,16 @@ cudnn.benchmark = True
 import math
 from DatasetLoader import load_data
 import matplotlib.pyplot as plt
-from DataAutomata import VOCAB_SIZE, PAD_INDEX
+from DataAutomata import VOCAB_SIZE, PAD_IDX
 from sklearn.metrics import confusion_matrix, classification_report
 import seaborn as sns
 
+"""
+This is where we define the Transformer
 
+It is an encoder Transformer so we need positional Encoding without it tokens will get mixed and make it harder
+for the transformer to understand the sequence.
+"""
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=2500):
         super(PositionalEncoding, self).__init__()
@@ -40,9 +45,9 @@ class AutomataTransformer(nn.Module):
             d_model=256, 
             nhead=8, 
             num_layers=6, 
-            num_classes=3, 
+            num_classes=2, 
             dropout =0.2, 
-            pad_index=PAD_INDEX,
+            pad_index=PAD_IDX,
             max_len=2500
         ):
         super().__init__()
@@ -50,11 +55,15 @@ class AutomataTransformer(nn.Module):
         self.d_model = d_model
         self.embedding = nn.Embedding(vocab_size, d_model, padding_idx=self.pad_idx)
         
+        # Classification token positioned at the beginning of every sequence,
+        # It looks at all the other tokens and gather context. In the end, this single token holds a summary
+        # of the whole sequence which we use it for the final prediction
         self.cls_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
         
         self.pos_encoding = PositionalEncoding(d_model, max_len=max_len + 10)
         self.dropout_input = nn.Dropout(p=dropout)
         
+        # nom_first is True to make deep transformers much more stable during training.
         transformer_layer = nn.TransformerEncoderLayer(
             d_model, nhead, dim_feedforward=d_model * 4, batch_first=True, dropout=dropout, norm_first=True
             )
@@ -70,6 +79,7 @@ class AutomataTransformer(nn.Module):
     
     def forward(self, x):
         batch_size = x.size(0)
+        # Used for ignoring empty padding
         mask = (x == self.pad_idx).to(torch.bool)
         
         x = self.embedding(x) * math.sqrt(self.d_model)
@@ -83,9 +93,13 @@ class AutomataTransformer(nn.Module):
         x = self.pos_encoding(x)
         x = self.dropout_input(x)
         
+        # Run through the transformer core block
         x = self.transformer_encoder(x, src_key_padding_mask=mask)
         
+        # Grab only the very first token of the sequence.
         cls_out = self.final_norm(x[:, 0, :])
+        
+        # Run that summary through a final simple layer to get the prediction4
         return self.fc(cls_out)
 
 def plot_history(history):
@@ -132,11 +146,17 @@ def train():
         import gc
         gc.collect()
 
-    NUM_CLASSES = 3
+    NUM_CLASSES = 2
     EPOCHS = 100
     LEARNING_RATE = 5e-5
-    BATCH_SIZE = 32
+    
+    # GPU doesn't have enough memory so processing with a small batch
+    # save the gradients and then we do it again
+    BATCH_SIZE = 16
+    
+    # After 8 times, update the model so the total batch size is 128 without loosing too much GPU memory
     accumulation_steps = 8
+    
     PATIENCE = 10
     CHECKPOINT = 'checkpoint.pth'
     LOG = 'training_log.csv'
@@ -144,9 +164,11 @@ def train():
     train_loader, val_loader, test_loader = load_data(batch_size=BATCH_SIZE)
     model = AutomataTransformer(vocab_size=VOCAB_SIZE, 
                                 num_classes=NUM_CLASSES, 
-                                pad_index=PAD_INDEX, 
+                                pad_index=PAD_IDX, 
                                 max_len=2500
                                 ).to(device)
+    
+    # Applying decay only to those that can get decayed, preventing overfitting
     decay = []
     no_decay = []
     for name, m in model.named_parameters():
@@ -160,9 +182,11 @@ def train():
         {'params': no_decay, 'weight_decay': 0.0}
     ]
     optimizer = optim.AdamW(optimizer_grouped_parameter, lr= LEARNING_RATE)
-    class_weights = torch.tensor([1.0, 1.0, 1.5]).to(device)
+    class_weights = torch.tensor([1.0, 1.0]).to(device)
     criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
     
+    # Run parts in 16-bit instead of 32-bit. Uses less memory and runs much faster on modern GPUs
+    # Does not affect accuracy
     scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' else None
     
     best_val_loss = float('inf')
@@ -170,6 +194,7 @@ def train():
     
     actual_steps = math.ceil(len(train_loader) / accumulation_steps)
     
+    # OneCycleLR helps the model jump out of a bad local minima early on  and settle into a good spot later.
     scheduler = optim.lr_scheduler.OneCycleLR(optimizer, 
                                                 max_lr=LEARNING_RATE, 
                                                 steps_per_epoch=actual_steps,
@@ -212,8 +237,10 @@ def train():
                 loss = criterion(outputs, y_batch) / accumulation_steps
             scaler.scale(loss).backward()
             
+            # Update the model's weights once we hit our step target
             if (i + 1) % accumulation_steps == 0 or (i + 1) == len(train_loader):
                 scaler.unscale_(optimizer)
+                # Clip gradients just in case they explode during training
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
@@ -249,7 +276,7 @@ def train():
     
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            torch.save(model.state_dict(), 'best_model.pth')
+            torch.save({k: v.cpu() for k,v in model.state_dict().items()},'best_model.pth')
             patience_counter = 0
         else:
             patience_counter +=1
@@ -257,15 +284,16 @@ def train():
         if patience_counter >= PATIENCE:
             print(f"Early stopping at epoch {epoch + 1}.")
             break
-        
-        torch.save({
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'best_val_loss': best_val_loss,
-            'patience_counter': patience_counter
-        }, CHECKPOINT)
+        model_cpu_state = {k: v.cpu() for k,v in model.state_dict().items()}
+        if (epoch + 1) % 5 ==0 or (epoch + 1) == EPOCHS:
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model_cpu_state,
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'best_val_loss': best_val_loss,
+                'patience_counter': patience_counter
+            }, CHECKPOINT)
         
         current_metrics = {
             'epoch': epoch, 'train_loss': avg_train_loss, 'train_acc': train_acc,
@@ -287,6 +315,10 @@ def train():
             torch.cuda.empty_cache()
 
     print("\n--- Final Test Evaluation ---")
+    if os.path.exists('best_model.pth'):
+        print("Loading best model weights from best_model.pth for evaluation...")
+        model.load_state_dict(torch.load('best_model.pth', map_location=device))
+    
     model.eval()
     test_correct = 0
     test_total = 0

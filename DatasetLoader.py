@@ -2,18 +2,24 @@ import pickle
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
-from DataAutomata import PAD_INDEX
+from DataAutomata import PAD_IDX
+"""
+This script for loading the dataset for training the model
+"""
 
+# 
 class AutomataDataset(Dataset):
     def __init__(self, pkl_file):
         with open(pkl_file, 'rb') as f:
             self.X, self.y = pickle.load(f)
         
+        # Sorting sequences by length
         combined = sorted(zip(self.X, self.y), key=lambda x:len(x[0]))
         self.X, self.y = zip(*combined)
         self.X = list(self.X)
         self.y = list(self.y)
         
+        # Transforming into tensors
         for i, seq in enumerate(self.X):
             self.X[i] = torch.tensor(seq, dtype=torch.long)
         self.y = torch.tensor(self.y, dtype=torch.long)
@@ -27,10 +33,12 @@ class AutomataDataset(Dataset):
 #Define how a single batch of data is being processed
 def collate_fn(batch):
     X, y = zip(*batch)
-    X_padded = torch.nn.utils.rnn.pad_sequence(X, batch_first=True, padding_value= PAD_INDEX)
+    
+    X_padded = torch.nn.utils.rnn.pad_sequence(X, batch_first=True, padding_value= PAD_IDX)
     return X_padded, torch.tensor(y)
 
 def load_data(batch_size=64, num_workers=4, pin_memory=True, persistent_workers=True):
+    # 'num_workers' and 'pin_memory' to load data into the GPU faster
     train_ds = AutomataDataset('train_data.pkl')
     val_ds = AutomataDataset('val_data.pkl')
     test_ds = AutomataDataset('test_data.pkl')
